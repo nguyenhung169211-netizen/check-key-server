@@ -1,19 +1,16 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const cors = require('cors');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Sử dụng file db lưu trong RAM hoặc thư mục tạm
-const db = new sqlite3.Database('./keys.db', (err) => {
-    if (err) console.error('Lỗi kết nối SQLite:', err.message);
-    else console.log('Kết nối SQLite thành công!');
-});
+// Khởi tạo SQLite
+const db = new Database('./keys.db');
 
 // Tạo bảng lưu Key
-db.run(`CREATE TABLE IF NOT EXISTS keys (
+db.exec(`CREATE TABLE IF NOT EXISTS keys (
     key_code TEXT PRIMARY KEY,
     hardware_id TEXT DEFAULT '',
     status TEXT DEFAULT 'ACTIVE'
@@ -27,8 +24,8 @@ app.post('/verify-key', (req, res) => {
         return res.json({ success: false, message: 'Vui lòng nhập Key và Hardware ID!' });
     }
 
-    db.get('SELECT * FROM keys WHERE key_code = ?', [key_code], (err, row) => {
-        if (err) return res.json({ success: false, message: 'Lỗi Server!' });
+    try {
+        const row = db.prepare('SELECT * FROM keys WHERE key_code = ?').get(key_code);
 
         if (!row) {
             return res.json({ success: false, message: 'Key không tồn tại!' });
@@ -39,7 +36,7 @@ app.post('/verify-key', (req, res) => {
         }
 
         if (!row.hardware_id || row.hardware_id === '') {
-            db.run('UPDATE keys SET hardware_id = ? WHERE key_code = ?', [hardware_id, key_code]);
+            db.prepare('UPDATE keys SET hardware_id = ? WHERE key_code = ?').run(hardware_id, key_code);
             return res.json({ success: true, message: 'Kích hoạt thành công!' });
         }
 
@@ -48,10 +45,12 @@ app.post('/verify-key', (req, res) => {
         } else {
             return res.json({ success: false, message: 'Key đã dùng cho máy khác!' });
         }
-    });
+    } catch (err) {
+        return res.json({ success: false, message: 'Lỗi Server!' });
+    }
 });
 
-// Sửa cổng kết nối theo PORT của Render cấp
+// Port cho Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`>>> Server Đang Chạy Tại Port ${PORT}`);
