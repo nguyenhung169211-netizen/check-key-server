@@ -8,7 +8,7 @@ app.use(cors());
 
 const db = new Database('./keys.db');
 
-// 1. Khởi tạo bảng dữ liệu hỗ trợ loại Key và ngày hết hạn
+// 1. Khởi tạo bảng dữ liệu
 db.exec(`CREATE TABLE IF NOT EXISTS keys (
     key_code TEXT PRIMARY KEY,
     hardware_id TEXT DEFAULT '',
@@ -17,7 +17,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS keys (
     expire_at DATETIME DEFAULT NULL
 )`);
 
-// 2. Hàm sinh Key ngẫu nhiên (XXXX-XXXX-XXXX-XXXX)
+// 2. Hàm sinh Key ngẫu nhiên
 function generateRandomKey(prefix = '') {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let key = '';
@@ -28,88 +28,84 @@ function generateRandomKey(prefix = '') {
     return prefix ? `${prefix}-${key}` : key;
 }
 
-// 3. Tự động nạp 100 Key Vĩnh Viễn & 100 Key 1 Tháng nếu DB trống
+// 3. Tự động khởi tạo 100 Key Vĩnh viễn & 100 Key 1 tháng nếu Database trống
 const count = db.prepare("SELECT COUNT(*) as total FROM keys").get().total;
 if (count === 0) {
     const insertStmt = db.prepare("INSERT OR IGNORE INTO keys (key_code, type, status) VALUES (?, ?, 'ACTIVE')");
     
-    // Tạo 100 Key Vĩnh viễn
+    // 100 Key Vĩnh viễn
     for (let i = 0; i < 100; i++) {
         insertStmt.run(generateRandomKey(), 'PERMANENT');
     }
     
-    // Tạo 100 Key 1 tháng (tiền tố M1TH)
+    // 100 Key 1 tháng
     for (let i = 0; i < 100; i++) {
         insertStmt.run(generateRandomKey('M1TH'), '1MONTH');
     }
-    console.log(">>> Đã khởi tạo thành công 100 Key Vĩnh Viễn và 100 Key 1 Tháng!");
+    console.log(">>> Đã khởi tạo danh sách 200 Key thành công!");
 }
 
-// 4. API Kiểm Tra & Kích Hoạt Key (Gọi từ Kodular)
+// 4. API Kiểm Tra Key
 app.post('/verify-key', (req, res) => {
     const { key_code, hardware_id } = req.body || {};
 
     if (!key_code) {
-        return res.json({ success: false, message: 'Vui lòng nhập Key!' });
+        return res.json({ success: false, message: 'KEY ĐÃ NHẬP SAI' });
     }
 
     try {
         const cleanKey = key_code.trim();
         const row = db.prepare('SELECT * FROM keys WHERE key_code = ?').get(cleanKey);
 
+        // Trường hợp 1: Viết sai Key hoặc Key không tồn tại
         if (!row) {
-            return res.json({ success: false, message: 'Key không tồn tại trên hệ thống!' });
+            return res.json({ success: false, message: 'KEY ĐÃ NHẬP SAI' });
         }
 
+        // Trường hợp 2: Key đã bị khóa thủ công
         if (row.status !== 'ACTIVE') {
-            return res.json({ success: false, message: 'Key này đã bị khóa!' });
+            return res.json({ success: false, message: 'KEY ĐÃ HẾT HẠN' });
         }
 
         const now = new Date();
 
-        // Kiềm tra hạn sử dụng đối với Key 1 tháng
+        // Trường hợp 3: Key 1 tháng đã hết hạn 30 ngày
         if (row.type === '1MONTH' && row.expire_at) {
             const expireDate = new Date(row.expire_at);
             if (now > expireDate) {
-                // Cập nhật trạng thái sang EXPIRED nếu đã hết hạn
                 db.prepare("UPDATE keys SET status = 'EXPIRED' WHERE key_code = ?").run(cleanKey);
-                return res.json({ success: false, message: 'Key 1 tháng của bạn đã HẾT HẠN sử dụng!' });
+                return res.json({ success: false, message: 'KEY ĐÃ HẾT HẠN' });
             }
         }
 
-        // LẦN ĐẦU KÍCH HOẠT: Khóa Hardware ID & Tính ngày hết hạn (nếu là Key 1 tháng)
+        // Trường hợp 4: Lần đầu tiên kích hoạt Key trên thiết bị
         if (!row.hardware_id || row.hardware_id === '') {
             let expireDateStr = null;
-
             if (row.type === '1MONTH') {
                 const expireDate = new Date();
-                expireDate.setDate(expireDate.getDate() + 30); // Cộng đúng 30 ngày
+                expireDate.setDate(expireDate.getDate() + 30); // Tự động tính đúng 30 ngày
                 expireDateStr = expireDate.toISOString();
             }
 
             db.prepare('UPDATE keys SET hardware_id = ?, expire_at = ? WHERE key_code = ?')
               .run(hardware_id || 'DEFAULT_ID', expireDateStr, cleanKey);
 
-            const msg = row.type === 'PERMANENT' 
-                ? 'Kích hoạt thành công Key VĨNH VIỄN!' 
-                : 'Kích hoạt thành công Key 1 THÁNG (Tính 30 ngày từ hôm nay)!';
-
-            return res.json({ success: true, message: msg });
+            return res.json({ success: true, message: 'ĐÃ NHẬP KEY THÀNH CÔNG' });
         }
 
-        // CÁC LẦN ĐĂNG NHẬP SAU: Kiểm tra đúng thiết bị
+        // Trường hợp 5: Kiểm tra đúng máy đã kích hoạt hay bị Share sang máy khác
         if (row.hardware_id === hardware_id) {
-            return res.json({ success: true, message: 'Đăng nhập thành công!' });
+            return res.json({ success: true, message: 'ĐÃ NHẬP KEY THÀNH CÔNG' });
         } else {
-            return res.json({ success: false, message: 'Key đã được kích hoạt trên thiết bị khác!' });
+            return res.json({ success: false, message: 'KEY ĐÃ NHẬP SAI' });
         }
 
     } catch (err) {
-        return res.json({ success: false, message: 'Lỗi xử lý máy chủ!' });
+        return res.json({ success: false, message: 'KEY ĐÃ NHẬP SAI' });
     }
 });
 
-// 5. Trang Admin kiểm tra tình trạng danh sách Key
+// 5. Trang Admin kiểm tra danh sách Key
 app.get('/admin-keys', (req, res) => {
     const keys = db.prepare("SELECT key_code, type, status, hardware_id, expire_at FROM keys").all();
     res.json({ total: keys.length, keys: keys });
